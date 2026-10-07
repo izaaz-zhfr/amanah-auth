@@ -1,0 +1,223 @@
+openapi: 3.0.3
+info:
+  title: Amanah Auth API
+  version: 1.0.0
+  description: |
+    REST API autentikasi: Register, Login Email, Login WhatsApp + OTP, Lupa Password + OTP.
+    Semua respons memakai envelope `{success, message, data}` atau `{success:false, error:{code,message,details,meta}}`.
+servers:
+  - url: http://localhost:8080
+tags:
+  - {name: Register}
+  - {name: Login Email}
+  - {name: Login WhatsApp}
+  - {name: Lupa Password}
+  - {name: Session}
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: [Register]
+      summary: Daftar akun baru (langsung login)
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Register'}}}}
+      responses:
+        '201': {$ref: '#/components/responses/Auth'}
+        '409': {description: Email / nomor WA sudah terdaftar (details.email / details.phone), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {$ref: '#/components/responses/Validation'}
+  /api/v1/auth/login:
+    post:
+      tags: [Login Email]
+      summary: Login email + kata sandi
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Login'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Auth'}
+        '401': {description: 'Kredensial salah. meta.attempts_remaining = sisa percobaan ("Sisa 2x")', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '423': {$ref: '#/components/responses/Locked'}
+        '422': {$ref: '#/components/responses/Validation'}
+  /api/v1/auth/login/whatsapp/otp/request:
+    post:
+      tags: [Login WhatsApp]
+      summary: Kirim (atau kirim ulang) OTP ke WhatsApp
+      description: Respons selalu 200 walau nomor tidak terdaftar (anti user-enumeration).
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Phone'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/OTPSent'}
+        '422': {$ref: '#/components/responses/Validation'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/Cooldown'}
+        '502': {description: Gagal mengirim OTP}
+  /api/v1/auth/login/whatsapp/otp/verify:
+    post:
+      tags: [Login WhatsApp]
+      summary: Verifikasi OTP lalu login
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VerifyLoginOTP'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Auth'}
+        '400': {description: 'otp_invalid (meta.attempts_remaining) atau otp_expired', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {$ref: '#/components/responses/Validation'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/auth/password/forgot:
+    post:
+      tags: [Lupa Password]
+      summary: Minta OTP reset kata sandi (email atau WhatsApp)
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Forgot'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/OTPSent'}
+        '422': {$ref: '#/components/responses/Validation'}
+        '429': {$ref: '#/components/responses/Cooldown'}
+  /api/v1/auth/password/otp/verify:
+    post:
+      tags: [Lupa Password]
+      summary: Verifikasi OTP reset, mendapat reset_token
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VerifyResetOTP'}}}}
+      responses:
+        '200':
+          description: OK
+          content: {application/json: {schema: {type: object, properties: {success: {type: boolean}, message: {type: string}, data: {type: object, properties: {reset_token: {type: string}, expires_in: {type: integer, example: 600}}}}}}}
+        '400': {description: otp_invalid / otp_expired, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {$ref: '#/components/responses/Validation'}
+  /api/v1/auth/password/reset:
+    post:
+      tags: [Lupa Password]
+      summary: Simpan kata sandi baru (otomatis login, semua sesi lama dicabut)
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ResetPassword'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Auth'}
+        '400': {description: reset_token_invalid, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {description: 'validation_failed atau password_reused', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/auth/token/refresh:
+    post:
+      tags: [Session]
+      summary: Tukar refresh token (rotasi; pemakaian ulang token lama mencabut semua sesi)
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [refresh_token], properties: {refresh_token: {type: string}}}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Auth'}
+        '401': {description: invalid_token, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/auth/logout:
+    post:
+      tags: [Session]
+      summary: Logout (cabut refresh token, atau semua sesi dengan all=true)
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {refresh_token: {type: string}, all: {type: boolean}}}}}}
+      responses:
+        '200': {description: OK}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/users/me:
+    get:
+      tags: [Session]
+      summary: Profil user yang sedang login
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: OK
+          content: {application/json: {schema: {type: object, properties: {success: {type: boolean}, data: {$ref: '#/components/schemas/User'}}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /health:
+    get:
+      summary: Health check
+      responses: {'200': {description: OK}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  responses:
+    Auth:
+      description: Sukses, berisi access token + refresh token
+      content: {application/json: {schema: {type: object, properties: {success: {type: boolean}, message: {type: string}, data: {$ref: '#/components/schemas/AuthResult'}}}}}
+    OTPSent:
+      description: OTP dikirim
+      content: {application/json: {schema: {type: object, properties: {success: {type: boolean}, message: {type: string}, data: {$ref: '#/components/schemas/OTPSent'}}}}}
+    Validation:
+      description: Validasi gagal. error.details berisi pesan per field
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Locked:
+      description: Akun dibekukan sementara (error.meta.retry_after_seconds, header Retry-After)
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Cooldown:
+      description: Kirim ulang OTP terlalu cepat (error.meta.retry_after_seconds)
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unauthorized:
+      description: Token tidak ada / tidak valid / kedaluwarsa
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+  schemas:
+    Register:
+      type: object
+      required: [full_name, email, phone, password, confirm_password, accept_terms]
+      properties:
+        full_name: {type: string, example: Budi Santoso}
+        email: {type: string, format: email, example: budi.santoso@gmail.com}
+        phone: {type: string, example: '+6281234567890', description: 'Boleh 0812..., 62812..., atau +62812...'}
+        password: {type: string, example: 'Rahasia#2026', description: 'Min 8, huruf besar+kecil, angka, simbol, maks 72 byte'}
+        confirm_password: {type: string}
+        accept_terms: {type: boolean}
+    Login:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier: {type: string, example: budi.santoso@gmail.com}
+        password: {type: string}
+        remember_me: {type: boolean, description: 'true = refresh token berlaku 30 hari (default 24 jam)'}
+    Phone:
+      type: object
+      required: [phone]
+      properties: {phone: {type: string, example: '+6281234567890'}}
+    VerifyLoginOTP:
+      type: object
+      required: [phone, code]
+      properties:
+        phone: {type: string}
+        code: {type: string, example: '482910'}
+        remember_me: {type: boolean}
+    Forgot:
+      type: object
+      required: [channel, identifier]
+      properties:
+        channel: {type: string, enum: [email, whatsapp]}
+        identifier: {type: string, description: 'Email atau nomor WA sesuai channel'}
+    VerifyResetOTP:
+      type: object
+      required: [channel, identifier, code]
+      properties:
+        channel: {type: string, enum: [email, whatsapp]}
+        identifier: {type: string}
+        code: {type: string}
+    ResetPassword:
+      type: object
+      required: [reset_token, new_password, confirm_password]
+      properties:
+        reset_token: {type: string}
+        new_password: {type: string}
+        confirm_password: {type: string}
+    User:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        full_name: {type: string}
+        email: {type: string}
+        phone: {type: string}
+        created_at: {type: string, format: date-time}
+        last_login_at: {type: string, format: date-time}
+    AuthResult:
+      type: object
+      properties:
+        access_token: {type: string}
+        refresh_token: {type: string}
+        token_type: {type: string, example: Bearer}
+        expires_in: {type: integer, example: 900}
+        user: {$ref: '#/components/schemas/User'}
+    OTPSent:
+      type: object
+      properties:
+        channel: {type: string, enum: [email, whatsapp]}
+        destination: {type: string, example: '+62 812-****-7890'}
+        expires_in: {type: integer, example: 300}
+        resend_available_in: {type: integer, example: 60}
+    Error:
+      type: object
+      properties:
+        success: {type: boolean, example: false}
+        error:
+          type: object
+          properties:
+            code: {type: string, example: validation_failed}
+            message: {type: string}
+            details: {type: object, additionalProperties: {type: string}}
+            meta: {type: object, additionalProperties: true}
